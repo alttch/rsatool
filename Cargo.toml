@@ -1,0 +1,10 @@
+[package]
+name = "rsa-sig"
+version = "0.1.0"
+authors = ["Sergei S. <div@altertech.com>"]
+edition = "2021"
+
+[dependencies]
+ring = "0.16.20"
+base64 = "0.13.0"
+clap = { version = "3.1.6", features = ["derive"] }
