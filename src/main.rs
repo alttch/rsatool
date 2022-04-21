@@ -1,12 +1,22 @@
 use clap::{Parser, Subcommand};
 use ring::{rand, signature};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::Read;
+
+const BUF_SIZE: usize = 1_000_000;
 
 #[derive(Subcommand, Clone)]
 enum Command {
     Sign(SignCommand),
+    Sha256(Sha256Command),
     Verify(VerifyCommand),
+}
+
+#[derive(Parser, Clone)]
+struct Sha256Command {
+    #[clap()]
+    file_path: String,
 }
 
 #[derive(Parser, Clone)]
@@ -30,6 +40,8 @@ struct VerifyCommand {
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Opts {
+    #[clap(short = 'J', long = "json-output")]
+    json: bool,
     #[clap(subcommand)]
     command: Command,
 }
@@ -121,23 +133,23 @@ impl fmt::Debug for Error {
 
 type EResult<T> = Result<T, Error>;
 
-fn sign(file_path: &str, pvt_key_path: &str) -> EResult<Vec<u8>> {
+fn sign(file_path: &str, pvt_key_path: &str) -> EResult<(Vec<u8>, Vec<u8>)> {
     let key = read_file(pvt_key_path)
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", pvt_key_path, e)))?;
     let key_pair = signature::RsaKeyPair::from_der(&key)?;
-    let content = read_file(file_path)
+    let content = file_sha256(file_path)
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", file_path, e)))?;
     let rng = rand::SystemRandom::new();
     let mut signature = vec![0; key_pair.public_modulus_len()];
     key_pair.sign(&signature::RSA_PKCS1_SHA256, &rng, &content, &mut signature)?;
-    Ok(signature)
+    Ok((signature, content))
 }
 
 fn verify(file_path: &str, pub_key_path: &str, signature: &[u8]) -> EResult<()> {
-    let content = read_file(file_path)
-        .map_err(|e| Error::io(format!("Unable to read file {}: {}", file_path, e)))?;
     let key = read_file(pub_key_path)
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", pub_key_path, e)))?;
+    let content = file_sha256(file_path)
+        .map_err(|e| Error::io(format!("Unable to read file {}: {}", file_path, e)))?;
     let k = signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, key);
     k.verify(&content, signature).map_err(Into::into)
 }
@@ -149,17 +161,54 @@ fn read_file(path: &str) -> Result<Vec<u8>, std::io::Error> {
     Ok(buf)
 }
 
+fn file_sha256(path: &str) -> Result<Vec<u8>, std::io::Error> {
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0; BUF_SIZE];
+    let mut hasher = Sha256::new();
+    loop {
+        let r = file.read(&mut buf)?;
+        if r == BUF_SIZE {
+            hasher.update(&buf);
+        } else {
+            hasher.update(&buf[..r]);
+            break;
+        }
+    }
+    Ok(hasher.finalize().to_vec())
+}
+
 fn main() -> EResult<()> {
     let opts = Opts::parse();
     match opts.command {
         Command::Sign(c) => {
-            let sig = sign(&c.file_path, &c.private_key)?;
-            println!("{}", base64::encode(&sig));
+            let (sig, sha256sum) = sign(&c.file_path, &c.private_key)?;
+            let signature = base64::encode(sig);
+            if opts.json {
+                println!(
+                    r#"{{"sha256":"{}","signature":"{}"}}"#,
+                    hex::encode(sha256sum),
+                    signature
+                );
+            } else {
+                println!("{}", signature);
+            }
         }
         Command::Verify(c) => {
             let sig = base64::decode(c.signature)?;
             verify(&c.file_path, &c.public_key, &sig)?;
-            println!("signature valid");
+            if opts.json {
+                println!(r#"{{"ok":true}}"#);
+            } else {
+                println!("signature valid");
+            }
+        }
+        Command::Sha256(c) => {
+            let sha256sum = hex::encode(file_sha256(&c.file_path)?);
+            if opts.json {
+                println!(r#"{{"sha256":"{}"}}"#, sha256sum);
+            } else {
+                println!("{}", sha256sum);
+            }
         }
     }
     Ok(())
