@@ -167,12 +167,10 @@ fn file_sha256(path: &str) -> Result<Vec<u8>, std::io::Error> {
     let mut hasher = Sha256::new();
     loop {
         let r = file.read(&mut buf)?;
-        if r == BUF_SIZE {
-            hasher.update(&buf);
-        } else {
-            hasher.update(&buf[..r]);
+        if r == 0 {
             break;
         }
+        hasher.update(&buf[..r]);
     }
     Ok(hasher.finalize().to_vec())
 }
