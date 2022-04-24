@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::Read;
 
-const BUF_SIZE: usize = 1_000_000;
+const BUF_SIZE: usize = 16_384;
 
 #[derive(Subcommand, Clone)]
 enum Command {
