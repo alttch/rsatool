@@ -55,7 +55,7 @@ struct DecryptCommand {
     #[clap()]
     file_path: String,
     #[clap()]
-    public_key: String,
+    private_key: String,
     #[clap()]
     out_file: String,
 }
@@ -304,7 +304,7 @@ fn main() -> EResult<()> {
             }
         }
         Command::Decrypt(c) => {
-            decrypt(&c.file_path, &c.public_key, &c.out_file)?;
+            decrypt(&c.file_path, &c.private_key, &c.out_file)?;
             if opts.json {
                 println!(r#"{{"ok":true}}"#);
             } else {
