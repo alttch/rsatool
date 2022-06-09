@@ -198,7 +198,7 @@ fn encrypt(file_path: &str, pub_key_path: &str, out_path: &str) -> EResult<()> {
     );
     let buf_size: usize = rsa.size().try_into().map_err(Error::io)?;
     loop {
-        let mut buf = vec![0_u8; buf_size / 2];
+        let mut buf = vec![0_u8; buf_size - 11];
         let mut res: Vec<u8> = vec![0; buf_size];
         let r = in_file.read(&mut buf)?;
         if r == 0 {
@@ -238,6 +238,7 @@ fn decrypt(file_path: &str, pub_key_path: &str, out_path: &str) -> EResult<()> {
             .map_err(Error::rsa)?;
         out_file.write_all(&res[..len])?;
     }
+    out_file.flush()?;
     Ok(())
 }
 
