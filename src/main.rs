@@ -1,16 +1,22 @@
 use clap::{Parser, Subcommand};
-use ring::{rand, signature};
+use pkcs8::DecodePrivateKey;
+use ring::signature;
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use sha2::{Digest, Sha256};
+use spki::DecodePublicKey;
 use std::fmt;
-use std::io::Read;
+use std::io::{BufReader, BufWriter, Read, Write};
 
 const BUF_SIZE: usize = 16_384;
+const RSA_BLOCK_SIZE: usize = 128;
 
 #[derive(Subcommand, Clone)]
 enum Command {
     Sign(SignCommand),
     Sha256(Sha256Command),
     Verify(VerifyCommand),
+    Encrypt(EncryptCommand),
+    Decrypt(DecryptCommand),
 }
 
 #[derive(Parser, Clone)]
@@ -35,6 +41,26 @@ struct VerifyCommand {
     public_key: String,
     #[clap()]
     signature: String,
+}
+
+#[derive(Parser, Clone)]
+struct EncryptCommand {
+    #[clap()]
+    file_path: String,
+    #[clap()]
+    public_key: String,
+    #[clap()]
+    out_file: String,
+}
+
+#[derive(Parser, Clone)]
+struct DecryptCommand {
+    #[clap()]
+    file_path: String,
+    #[clap()]
+    public_key: String,
+    #[clap()]
+    out_file: String,
 }
 
 #[derive(Parser)]
@@ -75,6 +101,12 @@ impl Error {
     fn io(msg: impl fmt::Display) -> Self {
         Self {
             kind: ErrorKind::Io,
+            message: msg.to_string(),
+        }
+    }
+    fn rsa(msg: impl fmt::Display) -> Self {
+        Self {
+            kind: ErrorKind::Rsa,
             message: msg.to_string(),
         }
     }
@@ -139,7 +171,7 @@ fn sign(file_path: &str, pvt_key_path: &str) -> EResult<(Vec<u8>, Vec<u8>)> {
     let key_pair = signature::RsaKeyPair::from_der(&key)?;
     let content = file_sha256(file_path)
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", file_path, e)))?;
-    let rng = rand::SystemRandom::new();
+    let rng = ring::rand::SystemRandom::new();
     let mut signature = vec![0; key_pair.public_modulus_len()];
     key_pair.sign(&signature::RSA_PKCS1_SHA256, &rng, &content, &mut signature)?;
     Ok((signature, content))
@@ -152,6 +184,63 @@ fn verify(file_path: &str, pub_key_path: &str, signature: &[u8]) -> EResult<()> 
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", file_path, e)))?;
     let k = signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, key);
     k.verify(&content, signature).map_err(Into::into)
+}
+
+fn encrypt(file_path: &str, pub_key_path: &str, out_path: &str) -> EResult<()> {
+    let mut rng = rand::thread_rng();
+    let key = read_file(pub_key_path)
+        .map_err(|e| Error::io(format!("Unable to read file {}: {}", pub_key_path, e)))?;
+    let public_key = RsaPublicKey::from_public_key_pem(std::str::from_utf8(&key).unwrap())
+        .map_err(Error::rsa)?;
+    let mut in_file = BufReader::new(std::fs::File::open(file_path)?);
+    let mut out_file = BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .append(false)
+            .write(true)
+            .open(out_path)?,
+    );
+    loop {
+        let mut buf = vec![0_u8; RSA_BLOCK_SIZE];
+        let padding = PaddingScheme::new_pkcs1v15_encrypt();
+        let r = in_file.read(&mut buf)?;
+        if r == 0 {
+            break;
+        }
+        let enc_data = public_key
+            .encrypt(&mut rng, padding, &buf)
+            .map_err(Error::rsa)?;
+        out_file.write_all(&enc_data)?;
+    }
+    Ok(())
+}
+
+fn decrypt(file_path: &str, pvt_key_path: &str, out_path: &str) -> EResult<()> {
+    let key = read_file(pvt_key_path)
+        .map_err(|e| Error::io(format!("Unable to read file {}: {}", pvt_key_path, e)))?;
+    let private_key =
+        RsaPrivateKey::from_pkcs8_pem(std::str::from_utf8(&key).unwrap()).map_err(Error::rsa)?;
+    let mut in_file = BufReader::new(std::fs::File::open(file_path)?);
+    let mut out_file = BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .append(false)
+            .write(true)
+            .open(out_path)?,
+    );
+    loop {
+        let mut buf = vec![0_u8; RSA_BLOCK_SIZE];
+        let padding = PaddingScheme::new_pkcs1v15_encrypt();
+        let r = in_file.read(&mut buf)?;
+        if r == 0 {
+            break;
+        }
+        let dec_data = private_key.decrypt(padding, &buf).map_err(Error::rsa)?;
+        out_file.write_all(&dec_data)?;
+    }
+    Ok(())
 }
 
 fn read_file(path: &str) -> Result<Vec<u8>, std::io::Error> {
@@ -206,6 +295,22 @@ fn main() -> EResult<()> {
                 println!(r#"{{"sha256":"{}"}}"#, sha256sum);
             } else {
                 println!("{}", sha256sum);
+            }
+        }
+        Command::Encrypt(c) => {
+            encrypt(&c.file_path, &c.public_key, &c.out_file)?;
+            if opts.json {
+                println!(r#"{{"ok":true}}"#);
+            } else {
+                println!("encrypted");
+            }
+        }
+        Command::Decrypt(c) => {
+            decrypt(&c.file_path, &c.public_key, &c.out_file)?;
+            if opts.json {
+                println!(r#"{{"ok":true}}"#);
+            } else {
+                println!("decrypted");
             }
         }
     }

@@ -5,7 +5,11 @@ authors = ["Sergei S. <div@altertech.com>"]
 edition = "2021"
 
 [dependencies]
-ring = "0.16.20"
+ring = { version = "0.16.20", features = ["alloc"] }
+rsa = "0.6.1"
+rand = "0.8.5"
+spki = "0.5.4"
+pkcs8 = "0.8.0"
 base64 = "0.13.0"
 clap = { version = "3.1.6", features = ["derive"] }
 sha2 = "0.10.2"
