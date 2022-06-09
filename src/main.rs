@@ -1,14 +1,11 @@
 use clap::{Parser, Subcommand};
-use pkcs8::DecodePrivateKey;
+use openssl::rsa::{Padding, Rsa};
 use ring::signature;
-use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use sha2::{Digest, Sha256};
-use spki::DecodePublicKey;
 use std::fmt;
 use std::io::{BufReader, BufWriter, Read, Write};
 
 const BUF_SIZE: usize = 16_384;
-const RSA_BLOCK_SIZE: usize = 128;
 
 #[derive(Subcommand, Clone)]
 enum Command {
@@ -187,11 +184,9 @@ fn verify(file_path: &str, pub_key_path: &str, signature: &[u8]) -> EResult<()> 
 }
 
 fn encrypt(file_path: &str, pub_key_path: &str, out_path: &str) -> EResult<()> {
-    let mut rng = rand::thread_rng();
     let key = read_file(pub_key_path)
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", pub_key_path, e)))?;
-    let public_key = RsaPublicKey::from_public_key_pem(std::str::from_utf8(&key).unwrap())
-        .map_err(Error::rsa)?;
+    let rsa = Rsa::public_key_from_der_pkcs1(&key).map_err(Error::rsa)?;
     let mut in_file = BufReader::new(std::fs::File::open(file_path)?);
     let mut out_file = BufWriter::new(
         std::fs::OpenOptions::new()
@@ -201,26 +196,26 @@ fn encrypt(file_path: &str, pub_key_path: &str, out_path: &str) -> EResult<()> {
             .write(true)
             .open(out_path)?,
     );
+    let buf_size: usize = rsa.size().try_into().map_err(Error::io)?;
     loop {
-        let mut buf = vec![0_u8; RSA_BLOCK_SIZE];
-        let padding = PaddingScheme::new_pkcs1v15_encrypt();
+        let mut buf = vec![0_u8; buf_size / 2];
+        let mut res: Vec<u8> = vec![0; buf_size];
         let r = in_file.read(&mut buf)?;
         if r == 0 {
             break;
         }
-        let enc_data = public_key
-            .encrypt(&mut rng, padding, &buf)
+        let len = rsa
+            .public_encrypt(&buf[..r], &mut res, Padding::PKCS1)
             .map_err(Error::rsa)?;
-        out_file.write_all(&enc_data)?;
+        out_file.write_all(&res[..len])?;
     }
     Ok(())
 }
 
-fn decrypt(file_path: &str, pvt_key_path: &str, out_path: &str) -> EResult<()> {
-    let key = read_file(pvt_key_path)
-        .map_err(|e| Error::io(format!("Unable to read file {}: {}", pvt_key_path, e)))?;
-    let private_key =
-        RsaPrivateKey::from_pkcs8_pem(std::str::from_utf8(&key).unwrap()).map_err(Error::rsa)?;
+fn decrypt(file_path: &str, pub_key_path: &str, out_path: &str) -> EResult<()> {
+    let key = read_file(pub_key_path)
+        .map_err(|e| Error::io(format!("Unable to read file {}: {}", pub_key_path, e)))?;
+    let rsa = Rsa::private_key_from_der(&key).map_err(Error::rsa)?;
     let mut in_file = BufReader::new(std::fs::File::open(file_path)?);
     let mut out_file = BufWriter::new(
         std::fs::OpenOptions::new()
@@ -230,15 +225,18 @@ fn decrypt(file_path: &str, pvt_key_path: &str, out_path: &str) -> EResult<()> {
             .write(true)
             .open(out_path)?,
     );
+    let buf_size: usize = rsa.size().try_into().map_err(Error::io)?;
     loop {
-        let mut buf = vec![0_u8; RSA_BLOCK_SIZE];
-        let padding = PaddingScheme::new_pkcs1v15_encrypt();
+        let mut buf = vec![0_u8; buf_size];
+        let mut res: Vec<u8> = vec![0; buf_size];
         let r = in_file.read(&mut buf)?;
         if r == 0 {
             break;
         }
-        let dec_data = private_key.decrypt(padding, &buf).map_err(Error::rsa)?;
-        out_file.write_all(&dec_data)?;
+        let len = rsa
+            .private_decrypt(&buf[..r], &mut res, Padding::PKCS1)
+            .map_err(Error::rsa)?;
+        out_file.write_all(&res[..len])?;
     }
     Ok(())
 }
