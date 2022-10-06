@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use openssl::rsa::{Padding, Rsa};
+use openssl::sha::Sha256;
 use ring::signature;
-use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{BufReader, BufWriter, Read, Write};
 
@@ -162,7 +162,7 @@ impl fmt::Debug for Error {
 
 type EResult<T> = Result<T, Error>;
 
-fn sign(file_path: &str, pvt_key_path: &str) -> EResult<(Vec<u8>, Vec<u8>)> {
+fn sign(file_path: &str, pvt_key_path: &str) -> EResult<(Vec<u8>, [u8; 32])> {
     let key = read_file(pvt_key_path)
         .map_err(|e| Error::io(format!("Unable to read file {}: {}", pvt_key_path, e)))?;
     let key_pair = signature::RsaKeyPair::from_der(&key)?;
@@ -249,7 +249,7 @@ fn read_file(path: &str) -> Result<Vec<u8>, std::io::Error> {
     Ok(buf)
 }
 
-fn file_sha256(path: &str) -> Result<Vec<u8>, std::io::Error> {
+fn file_sha256(path: &str) -> Result<[u8; 32], std::io::Error> {
     let mut file = std::fs::File::open(path)?;
     let mut buf = [0; BUF_SIZE];
     let mut hasher = Sha256::new();
@@ -260,7 +260,7 @@ fn file_sha256(path: &str) -> Result<Vec<u8>, std::io::Error> {
         }
         hasher.update(&buf[..r]);
     }
-    Ok(hasher.finalize().to_vec())
+    Ok(hasher.finish())
 }
 
 fn main() -> EResult<()> {
